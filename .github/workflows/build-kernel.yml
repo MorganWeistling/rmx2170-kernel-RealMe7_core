@@ -60,10 +60,29 @@ jobs:
             "${{ inputs.kernel_repo }}" kernel
           echo "Kernel HEAD: $(git -C kernel rev-parse HEAD)"
 
-      - name: Clone Proton clang toolchain
+      - name: Download AOSP clang + Android GCC toolchains
+        # Realme/Oplus AndroidR tree is built by the OEM with AOSP clang and the
+        # aarch64-linux-android- triple (see /proc/version: "clang for Android
+        # NDK"). Proton clang + the gnu triple fails the tree's clang detection,
+        # so we fetch the Android-11 clang (r383902b) and GCC 4.9 prebuilts.
         run: |
-          git clone --depth=1 "${{ inputs.clang_repo }}" clang
-          echo "$GITHUB_WORKSPACE/clang/bin" >> "$GITHUB_PATH"
+          AOSP=https://android.googlesource.com/platform/prebuilts
+          BR=refs/heads/android11-release
+          mkdir -p clang gcc64 gcc32
+          echo "Fetching AOSP clang r383902b ..."
+          curl -Ls "$AOSP/clang/host/linux-x86/+archive/$BR/clang-r383902b.tar.gz" | tar -xz -C clang
+          echo "Fetching aarch64-linux-android-4.9 ..."
+          curl -Ls "$AOSP/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/$BR.tar.gz" | tar -xz -C gcc64
+          echo "Fetching arm-linux-androideabi-4.9 ..."
+          curl -Ls "$AOSP/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/$BR.tar.gz" | tar -xz -C gcc32
+          test -x clang/bin/clang || { echo "::error::clang download failed"; ls -la clang; exit 1; }
+          test -x gcc64/bin/aarch64-linux-android-gcc || { echo "::error::gcc64 download failed"; ls -la gcc64/bin | head; exit 1; }
+          echo "clang: $(clang/bin/clang --version | head -1)"
+          {
+            echo "$GITHUB_WORKSPACE/clang/bin"
+            echo "$GITHUB_WORKSPACE/gcc64/bin"
+            echo "$GITHUB_WORKSPACE/gcc32/bin"
+          } >> "$GITHUB_PATH"
 
       # ---- KernelSU-Next -------------------------------------------------
       - name: Integrate KernelSU-Next
@@ -185,11 +204,12 @@ jobs:
       - name: Build kernel
         working-directory: kernel
         run: |
-          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
+          # Android triple: matches the OEM toolchain the tree expects.
           MAKE_ARGS="ARCH=arm64 O=out CC=clang LD=ld.lld \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
             OBJDUMP=llvm-objdump STRIP=llvm-strip"
           make -j"$(nproc)" $MAKE_ARGS "${{ inputs.defconfig }}"
