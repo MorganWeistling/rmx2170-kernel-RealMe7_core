@@ -163,7 +163,13 @@ jobs:
             while IFS= read -r kc; do
               case "$kc" in *'$'*) continue;; esac   # skip variable paths
               if [ ! -f "$kc" ]; then
-                mkdir -p "$(dirname "$kc")"; : > "$kc"
+                # Some dumps ship a path component as a stray file/broken symlink
+                # where a directory is expected; replace it with a real dir.
+                d="$(dirname "$kc")"
+                if [ -e "$d" ] && [ ! -d "$d" ]; then rm -f "$d"; fi
+                mkdir -p "$d"
+                [ -e "$kc" ] && [ ! -f "$kc" ] && rm -rf "$kc"
+                : > "$kc"
                 echo "stub -> $kc"; changed=1
               fi
             done < <(grep -rhoE '^[[:space:]]*source[[:space:]]+"?[A-Za-z0-9_./-]+/Kconfig[A-Za-z0-9_.-]*"?' \
