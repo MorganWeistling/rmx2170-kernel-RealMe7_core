@@ -327,12 +327,31 @@ jobs:
             AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
             OBJDUMP=llvm-objdump STRIP=llvm-strip"
           make -j"$(nproc)" $MAKE_ARGS "${{ inputs.defconfig }}"
-          # Verify KSU actually landed in the generated .config (a green build
-          # with CONFIG_KSU silently dropped ships a rootless kernel).
+          # Appending CONFIG_KSU=y to the defconfig proved unreliable (make
+          # defconfig drops it). Force-enable in the generated .config with
+          # scripts/config, then re-resolve with olddefconfig.
           if [ "${{ inputs.enable_ksu }}" = "true" ]; then
-            echo "=== KSU/KPROBES in generated .config ==="
-            grep -E 'CONFIG_KSU=|CONFIG_KSU_|CONFIG_KPROBES=' out/.config || true
-            grep -q '^CONFIG_KSU=y' out/.config || { echo "::error::CONFIG_KSU not enabled in .config"; exit 1; }
+            echo "=== KSU wiring diagnostics ==="
+            echo "drivers/kernelsu -> $(readlink drivers/kernelsu 2>/dev/null)"
+            echo "config KSU in sourced Kconfig: $(grep -c '^config KSU$' drivers/kernelsu/Kconfig 2>/dev/null)"
+            grep -n 'kernelsu/Kconfig' drivers/Kconfig || echo "(source line MISSING in drivers/Kconfig)"
+            chmod +x scripts/config
+            KOPTS="--enable KSU --enable KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK"
+            if [ "${{ inputs.enable_susfs }}" = "true" ]; then
+              KOPTS="$KOPTS --enable KSU_SUSFS --enable KSU_SUSFS_SUS_PATH \
+                --enable KSU_SUSFS_SUS_MOUNT --enable KSU_SUSFS_SUS_KSTAT \
+                --enable KSU_SUSFS_TRY_UMOUNT --enable KSU_SUSFS_SPOOF_UNAME \
+                --enable KSU_SUSFS_HAS_MAGIC_MOUNT \
+                --enable KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
+                --enable KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+                --enable KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+                --enable KSU_SUSFS_ENABLE_LOG --enable KSU_SUSFS_OPEN_REDIRECT"
+            fi
+            ./scripts/config --file out/.config $KOPTS
+            make -j"$(nproc)" $MAKE_ARGS olddefconfig
+            echo "=== KSU/SUSFS in final .config ==="
+            grep -E '^CONFIG_KSU' out/.config || true
+            grep -q '^CONFIG_KSU=y' out/.config || { echo "::error::CONFIG_KSU still not enabled"; head -5 drivers/kernelsu/Kconfig; exit 1; }
           fi
           make -j"$(nproc)" $MAKE_ARGS
           ls -lh out/arch/arm64/boot/
