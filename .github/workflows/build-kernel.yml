@@ -148,6 +148,29 @@ jobs:
             } >> "$CFG"
           fi
 
+      - name: Stub missing vendor Kconfig sources
+        # Oplus/Realme open-source dumps reference Kconfig files they forgot to
+        # publish (e.g. block/oppo_foreground_io_opt/Kconfig), which aborts the
+        # Kconfig parser. Create an empty stub for every `source <path>/Kconfig`
+        # whose target is missing. The matching Makefile obj-$(CONFIG_*) stays
+        # empty because the config is never defined, so nothing extra is built.
+        working-directory: kernel
+        shell: bash
+        run: |
+          changed=1
+          while [ "$changed" = 1 ]; do
+            changed=0
+            while IFS= read -r kc; do
+              case "$kc" in *'$'*) continue;; esac   # skip variable paths
+              if [ ! -f "$kc" ]; then
+                mkdir -p "$(dirname "$kc")"; : > "$kc"
+                echo "stub -> $kc"; changed=1
+              fi
+            done < <(grep -rhoE '^[[:space:]]*source[[:space:]]+"?[A-Za-z0-9_./-]+/Kconfig[A-Za-z0-9_.-]*"?' \
+                       --include='Kconfig*' . | sed -E 's/^[[:space:]]*source[[:space:]]+//; s/"//g' | sort -u)
+          done
+          echo "Kconfig source stubs complete."
+
       - name: Build kernel
         working-directory: kernel
         run: |
