@@ -204,6 +204,27 @@ jobs:
           done
           echo "Kconfig source stubs complete."
 
+      - name: Stub missing vendor module Makefiles
+        # Realme also dropped several Oplus module dirs referenced by
+        # `obj-$(CONFIG_x) += dir/` (mm/oppo_healthinfo, fs/osdcardfs, ...).
+        # Create an empty Makefile for any referenced subdir that lacks one so
+        # kbuild can descend without building anything from the absent feature.
+        working-directory: kernel
+        shell: bash
+        run: |
+          find . \( -name Makefile -o -name Kbuild \) -print0 | while IFS= read -r -d '' mf; do
+            dir=$(dirname "$mf")
+            grep -oE 'obj-[^=]*\+?=[[:space:]]*[A-Za-z0-9_./-]+/' "$mf" 2>/dev/null \
+              | grep -oE '[A-Za-z0-9_./-]+/$' | while IFS= read -r sub; do
+                p="$dir/$sub"
+                if [ ! -f "${p}Makefile" ] && [ ! -f "${p}Kbuild" ]; then
+                  mkdir -p "$p"; : > "${p}Makefile"
+                  echo "stub Makefile -> ${p}Makefile"
+                fi
+            done
+          done
+          echo "Vendor module Makefile stubs complete."
+
       - name: Build kernel
         working-directory: kernel
         run: |
