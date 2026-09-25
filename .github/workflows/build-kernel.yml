@@ -163,6 +163,10 @@ jobs:
           if ! grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig; then
             printf '\nsource "drivers/kernelsu/Kconfig"\n' >> drivers/Kconfig
           fi
+          echo "=== drivers/Kconfig KSU source context ==="
+          grep -n -B2 -A1 'kernelsu' drivers/Kconfig || echo "no kernelsu line"
+          echo "=== last 6 lines of drivers/Kconfig ==="
+          tail -6 drivers/Kconfig
           echo "=== inserting KSU-Next manual hooks (4.14 non-GKI) ==="
           curl -sL "https://raw.githubusercontent.com/MorganWeistling/rmx2170-kernel-RealMe7_core/main/scripts/ksu_manual_hooks.py" -o /tmp/ksu_hooks.py
           python3 /tmp/ksu_hooks.py
