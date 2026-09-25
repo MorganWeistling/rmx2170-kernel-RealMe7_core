@@ -48,7 +48,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             git make bc bison flex libssl-dev libncurses-dev \
             build-essential ccache zip python3 cpio kmod \
-            device-tree-compiler libelf-dev
+            device-tree-compiler libelf-dev wiggle
 
       - name: Clone kernel source
         run: |
@@ -87,7 +87,30 @@ jobs:
           # main kernel patch
           PATCH=$(ls "$SUS"/kernel_patches/50_add_susfs_in_*4.14*.patch | head -n1)
           echo "Applying $PATCH"
-          patch -p1 < "$PATCH" || { echo "::warning::susfs patch had rejects — review .rej files"; }
+          patch -p1 --fuzz=3 < "$PATCH" || true
+          # The aex9 tree drifts context near some hunks, so a few reject. Every
+          # susfs hunk is an additive #ifdef CONFIG_KSU_SUSFS_* block, so wiggle
+          # (word-level fuzzy merge) can place them safely. KSU-side files
+          # (kernel/selinux/*, kernel/Makefile) are allowed to stay rejected —
+          # KernelSU-Next provides susfs's control side natively.
+          for rej in $(find . -name '*.rej'); do
+            tgt="${rej%.rej}"
+            case "$tgt" in
+              ./kernel/selinux/*|./kernel/Makefile) echo "skip KSU-side $rej"; continue;;
+            esac
+            echo "wiggle -> $tgt"
+            if wiggle --replace --no-backup "$tgt" "$rej"; then rm -f "$rej"; fi
+          done
+          # Fail hard if any core hunk is still unresolved or left conflict markers.
+          REJ=$(find fs include -name '*.rej' 2>/dev/null || true)
+          CONFLICT=$(grep -rl '^<<<<<<<' fs include 2>/dev/null || true)
+          if [ -n "$REJ$CONFLICT" ]; then
+            echo "::error::susfs core hunks unresolved:"
+            for f in $REJ; do echo "===== REJECT $f ====="; cat "$f"; done
+            for f in $CONFLICT; do echo "===== CONFLICT in $f ====="; grep -n '<<<<<<<\|>>>>>>>\|=======' "$f"; done
+            exit 1
+          fi
+          echo "All core susfs hunks applied cleanly."
           # KernelSU-side susfs patch (if present in this susfs release)
           KSU_PATCH=$(ls "$SUS"/kernel_patches/KernelSU*/*.patch 2>/dev/null | head -n1 || true)
           if [ -n "$KSU_PATCH" ] && [ -d KernelSU-Next ]; then
