@@ -83,6 +83,7 @@ jobs:
             fi
           }
           graft include/linux/uifirst
+          graft include/linux/oppo_healthinfo
           graft kernel/oppo_special_opt
           graft mm/oppo_healthinfo
           graft fs/proc/oppo_healthinfo
