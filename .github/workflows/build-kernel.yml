@@ -335,6 +335,7 @@ jobs:
             echo "drivers/kernelsu -> $(readlink drivers/kernelsu 2>/dev/null)"
             echo "config KSU in sourced Kconfig: $(grep -c '^config KSU$' drivers/kernelsu/Kconfig 2>/dev/null)"
             grep -n 'kernelsu/Kconfig' drivers/Kconfig || echo "(source line MISSING in drivers/Kconfig)"
+            echo "AFTER make defconfig: $(grep -E '^CONFIG_KSU=|^# CONFIG_KSU ' out/.config || echo NONE)"
             chmod +x scripts/config
             KOPTS="--enable KSU --enable KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK"
             if [ "${{ inputs.enable_susfs }}" = "true" ]; then
@@ -348,7 +349,9 @@ jobs:
                 --enable KSU_SUSFS_ENABLE_LOG --enable KSU_SUSFS_OPEN_REDIRECT"
             fi
             ./scripts/config --file out/.config $KOPTS
+            echo "AFTER scripts/config: $(grep -E '^CONFIG_KSU=' out/.config || echo NONE)"
             make -j"$(nproc)" $MAKE_ARGS olddefconfig
+            echo "AFTER olddefconfig: $(grep -E '^CONFIG_KSU=' out/.config || echo NONE)"
             echo "=== KSU/SUSFS in final .config ==="
             grep -E '^CONFIG_KSU' out/.config || true
             grep -q '^CONFIG_KSU=y' out/.config || { echo "::error::CONFIG_KSU still not enabled"; head -5 drivers/kernelsu/Kconfig; exit 1; }
