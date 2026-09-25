@@ -223,11 +223,10 @@ jobs:
             sed -i 's/inotify_mark_user_mask(mark)/(mark->mask \& IN_ALL_EVENTS)/g' fs/notify/fdinfo.c
             echo "patched inotify_mark_user_mask for 4.14"
           fi
-          # KernelSU-side susfs patch (if present in this susfs release)
-          KSU_PATCH=$(ls "$SUS"/kernel_patches/KernelSU*/*.patch 2>/dev/null | head -n1 || true)
-          if [ -n "$KSU_PATCH" ] && [ -d KernelSU-Next ]; then
-            ( cd KernelSU-Next && patch -p1 < "../$KSU_PATCH" || echo "::warning::KSU susfs patch rejects" )
-          fi
+          # NOTE: do NOT apply kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch.
+          # That patch targets the ORIGINAL KernelSU repo; KernelSU-Next already
+          # supports SUSFS natively, and applying it corrupts KSU-Next's Kconfig
+          # (config KSU vanishes -> rootless kernel).
 
       - name: Enable KSU / SUSFS config options
         if: ${{ inputs.enable_ksu }}
@@ -330,11 +329,16 @@ jobs:
             CROSS_COMPILE_ARM32=$CROSS32 \
             AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
             OBJDUMP=llvm-objdump STRIP=llvm-strip"
-          make -j"$(nproc)" $MAKE_ARGS "${{ inputs.defconfig }}"
+          make -j"$(nproc)" $MAKE_ARGS "${{ inputs.defconfig }}" 2>&1 | tee /tmp/defc.log
           # Appending CONFIG_KSU=y to the defconfig proved unreliable (make
           # defconfig drops it). Force-enable in the generated .config with
           # scripts/config, then re-resolve with olddefconfig.
           if [ "${{ inputs.enable_ksu }}" = "true" ]; then
+            echo "=== defconfig warnings mentioning KSU/symbol ==="
+            grep -iE 'ksu|unknown symbol|warning:.*symbol' /tmp/defc.log | head -20 || echo "(none)"
+            echo "=== scripts/config --state KSU ==="
+            chmod +x scripts/config
+            ./scripts/config --file out/.config --state KSU || true
             echo "=== KSU wiring diagnostics ==="
             echo "drivers/kernelsu -> $(readlink drivers/kernelsu 2>/dev/null)"
             echo "config KSU in sourced Kconfig: $(grep -c '^config KSU$' drivers/kernelsu/Kconfig 2>/dev/null)"
