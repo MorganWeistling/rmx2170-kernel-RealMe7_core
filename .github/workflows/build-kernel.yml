@@ -163,6 +163,9 @@ jobs:
           if ! grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig; then
             printf '\nsource "drivers/kernelsu/Kconfig"\n' >> drivers/Kconfig
           fi
+          echo "=== inserting KSU-Next manual hooks (4.14 non-GKI) ==="
+          curl -sL "https://raw.githubusercontent.com/MorganWeistling/rmx2170-kernel-RealMe7_core/main/scripts/ksu_manual_hooks.py" -o /tmp/ksu_hooks.py
+          python3 /tmp/ksu_hooks.py
 
       # ---- SUSFS ---------------------------------------------------------
       # Non-GKI MSM-4.14 flow: copy susfs fs/ + headers, apply the kernel patch,
@@ -209,6 +212,13 @@ jobs:
             exit 1
           fi
           echo "All core susfs hunks applied cleanly."
+          # susfs' fdinfo.c hunk calls inotify_mark_user_mask() (added to mainline
+          # after 4.14); it returns exactly mark->mask & IN_ALL_EVENTS, which the
+          # surrounding code already computes as `mask`. Rewrite it for 4.14.
+          if grep -q 'inotify_mark_user_mask' fs/notify/fdinfo.c; then
+            sed -i 's/inotify_mark_user_mask(mark)/(mark->mask \& IN_ALL_EVENTS)/g' fs/notify/fdinfo.c
+            echo "patched inotify_mark_user_mask for 4.14"
+          fi
           # KernelSU-side susfs patch (if present in this susfs release)
           KSU_PATCH=$(ls "$SUS"/kernel_patches/KernelSU*/*.patch 2>/dev/null | head -n1 || true)
           if [ -n "$KSU_PATCH" ] && [ -d KernelSU-Next ]; then
@@ -221,9 +231,11 @@ jobs:
         run: |
           CFG="arch/arm64/configs/${{ inputs.defconfig }}"
           {
-            echo "CONFIG_KPROBES=y"          # required by KSU_KPROBES_HOOK
             echo "CONFIG_KSU=y"
-            echo "CONFIG_KSU_KPROBES_HOOK=y"
+            # 4.14 arm64 lacks syscall_fn_t (kprobe hook path), so use the
+            # documented manual hooks instead (added in the Integrate step).
+            echo "CONFIG_KSU_MANUAL_HOOK=y"
+            echo "# CONFIG_KSU_KPROBES_HOOK is not set"
           } >> "$CFG"
           if [ "${{ inputs.enable_susfs }}" = "true" ]; then
             {
