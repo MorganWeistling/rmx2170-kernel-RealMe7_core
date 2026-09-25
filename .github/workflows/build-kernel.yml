@@ -234,9 +234,11 @@ jobs:
         run: |
           CFG="arch/arm64/configs/${{ inputs.defconfig }}"
           {
+            # CONFIG_KPROBES must be on for the KSU symbol to resolve in this
+            # tree; but 4.14 arm64 lacks syscall_fn_t, so we still force MANUAL
+            # hooks (added in the Integrate step) and keep the kprobe hook off.
+            echo "CONFIG_KPROBES=y"
             echo "CONFIG_KSU=y"
-            # 4.14 arm64 lacks syscall_fn_t (kprobe hook path), so use the
-            # documented manual hooks instead (added in the Integrate step).
             echo "CONFIG_KSU_MANUAL_HOOK=y"
             echo "# CONFIG_KSU_KPROBES_HOOK is not set"
           } >> "$CFG"
@@ -345,7 +347,7 @@ jobs:
             grep -n 'kernelsu/Kconfig' drivers/Kconfig || echo "(source line MISSING in drivers/Kconfig)"
             echo "AFTER make defconfig: $(grep -E '^CONFIG_KSU=|^# CONFIG_KSU ' out/.config || echo NONE)"
             chmod +x scripts/config
-            KOPTS="--enable KSU --enable KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK"
+            KOPTS="--enable KPROBES --enable KSU --enable KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK"
             if [ "${{ inputs.enable_susfs }}" = "true" ]; then
               KOPTS="$KOPTS --enable KSU_SUSFS --enable KSU_SUSFS_SUS_PATH \
                 --enable KSU_SUSFS_SUS_MOUNT --enable KSU_SUSFS_SUS_KSTAT \
