@@ -38,7 +38,9 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned to 22.04: Proton clang's bundled ld (2022) can't link host tools
+    # against Ubuntu 24.04's glibc (.relr.dyn sections). 22.04 glibc 2.35 is fine.
+    runs-on: ubuntu-22.04
     steps:
       - name: Install build dependencies
         run: |
