@@ -212,15 +212,17 @@ jobs:
         working-directory: kernel
         shell: bash
         run: |
-          find . \( -name Makefile -o -name Kbuild \) -print0 | while IFS= read -r -d '' mf; do
+          set +e +o pipefail   # greps legitimately find nothing in most files
+          find . \( -name Makefile -o -name Kbuild \) | while IFS= read -r mf; do
             dir=$(dirname "$mf")
-            grep -oE 'obj-[^=]*\+?=[[:space:]]*[A-Za-z0-9_./-]+/' "$mf" 2>/dev/null \
-              | grep -oE '[A-Za-z0-9_./-]+/$' | while IFS= read -r sub; do
-                p="$dir/$sub"
-                if [ ! -f "${p}Makefile" ] && [ ! -f "${p}Kbuild" ]; then
-                  mkdir -p "$p"; : > "${p}Makefile"
-                  echo "stub Makefile -> ${p}Makefile"
-                fi
+            subs=$(grep -oE 'obj-[^=]*\+?=[[:space:]]*[A-Za-z0-9_./-]+/' "$mf" 2>/dev/null \
+                     | grep -oE '[A-Za-z0-9_./-]+/$')
+            for sub in $subs; do
+              p="$dir/$sub"
+              if [ ! -f "${p}Makefile" ] && [ ! -f "${p}Kbuild" ]; then
+                mkdir -p "$p"; : > "${p}Makefile"
+                echo "stub Makefile -> ${p}Makefile"
+              fi
             done
           done
           echo "Vendor module Makefile stubs complete."
