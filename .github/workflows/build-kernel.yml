@@ -165,10 +165,11 @@ jobs:
               if [ ! -f "$kc" ]; then
                 # Some dumps ship a path component as a stray file/broken symlink
                 # where a directory is expected; replace it with a real dir.
+                # -L catches dangling symlinks ([ -e ] is false for those).
                 d="$(dirname "$kc")"
-                if [ -e "$d" ] && [ ! -d "$d" ]; then rm -f "$d"; fi
+                if [ -L "$d" ] || { [ -e "$d" ] && [ ! -d "$d" ]; }; then rm -f "$d"; fi
                 mkdir -p "$d"
-                [ -e "$kc" ] && [ ! -f "$kc" ] && rm -rf "$kc"
+                if [ -L "$kc" ] || { [ -e "$kc" ] && [ ! -f "$kc" ]; }; then rm -rf "$kc"; fi
                 : > "$kc"
                 echo "stub -> $kc"; changed=1
               fi
