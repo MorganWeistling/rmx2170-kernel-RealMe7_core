@@ -27,9 +27,18 @@ on:
         type: boolean
         default: true
       clang_repo:
-        description: "Proton clang git URL"
+        description: "Proton clang git URL (used when toolchain=proton)"
         required: true
         default: "https://github.com/kdrag0n/proton-clang"
+      toolchain:
+        description: "Toolchain: proton (sm7125/AOSP-ROM trees) or aosp (stock Oplus tree)"
+        type: choice
+        options: [proton, aosp]
+        default: proton
+      vendor_graft:
+        description: "Graft missing Oplus files from sibling dump (stock tree only)"
+        type: boolean
+        default: false
 
 env:
   ARCH: arm64
@@ -61,10 +70,11 @@ jobs:
           echo "Kernel HEAD: $(git -C kernel rev-parse HEAD)"
 
       - name: Graft missing Oplus feature files from sibling dump
+        if: ${{ inputs.vendor_graft }}
         # The atoll 6pro/7pro/8pro/X2 open-source release drops several Oplus
         # feature files (headers woven into core code) that ARE published in the
         # sibling realme6/7/Narzo AndroidR dump. Copy the real files over so
-        # they compile instead of being empty-stubbed.
+        # they compile instead of being empty-stubbed. Off for sm7125/AOSP trees.
         working-directory: kernel
         shell: bash
         run: |
@@ -90,7 +100,14 @@ jobs:
           graft fs/osdcardfs
           rm -rf "$SIB/.git"
 
+      - name: Clone Proton clang toolchain
+        if: ${{ inputs.toolchain == 'proton' }}
+        run: |
+          git clone --depth=1 "${{ inputs.clang_repo }}" clang
+          echo "$GITHUB_WORKSPACE/clang/bin" >> "$GITHUB_PATH"
+
       - name: Download AOSP clang + Android GCC toolchains
+        if: ${{ inputs.toolchain == 'aosp' }}
         # Realme/Oplus AndroidR tree is built by the OEM with AOSP clang and the
         # aarch64-linux-android- triple (see /proc/version: "clang for Android
         # NDK"). Proton clang + the gnu triple fails the tree's clang detection,
@@ -121,9 +138,22 @@ jobs:
       - name: Integrate KernelSU-Next
         if: ${{ inputs.enable_ksu }}
         working-directory: kernel
+        shell: bash
         run: |
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
           echo "KSU-Next version: $(git -C KernelSU-Next describe --tags 2>/dev/null || echo n/a)"
+          # Recent setup.sh no longer wires kernelsu into the kernel build, so
+          # CONFIG_KSU never becomes a valid symbol and KSU silently drops out.
+          # Explicitly source its Kconfig and add its obj to drivers/.
+          test -e drivers/kernelsu/Kconfig || ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          if ! grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig; then
+            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+          if ! grep -q 'kernelsu' drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          fi
+          echo "=== wiring check ==="
+          grep -n 'kernelsu' drivers/Kconfig drivers/Makefile || { echo "::error::KSU wiring failed"; exit 1; }
 
       # ---- SUSFS ---------------------------------------------------------
       # Non-GKI MSM-4.14 flow: copy susfs fs/ + headers, apply the kernel patch,
@@ -263,11 +293,15 @@ jobs:
         working-directory: kernel
         run: |
           export PATH="$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
-          # Android triple: matches the OEM toolchain the tree expects.
+          if [ "${{ inputs.toolchain }}" = "aosp" ]; then
+            CROSS=aarch64-linux-android-; CROSS32=arm-linux-androideabi-
+          else
+            CROSS=aarch64-linux-gnu-; CROSS32=arm-linux-gnueabi-
+          fi
           MAKE_ARGS="ARCH=arm64 O=out CC=clang LD=ld.lld \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-android- \
-            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            CROSS_COMPILE=$CROSS \
+            CROSS_COMPILE_ARM32=$CROSS32 \
             AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
             OBJDUMP=llvm-objdump STRIP=llvm-strip"
           make -j"$(nproc)" $MAKE_ARGS "${{ inputs.defconfig }}"
