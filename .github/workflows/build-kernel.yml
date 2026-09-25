@@ -48,7 +48,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             git make bc bison flex libssl-dev libncurses-dev \
             build-essential ccache zip python3 cpio kmod \
-            device-tree-compiler libelf-dev wiggle
+            device-tree-compiler libelf-dev wiggle \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          # Vendor (Oplus/Realme) trees wrap CC in a python script and their
+          # compiler-check scripts invoke $(CROSS_COMPILE)gcc directly, so the
+          # GNU cross toolchains must be present even when we compile with clang.
 
       - name: Clone kernel source
         run: |
