@@ -76,7 +76,10 @@ jobs:
           echo "Fetching arm-linux-androideabi-4.9 ..."
           curl -Ls "$AOSP/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/$BR.tar.gz" | tar -xz -C gcc32
           test -x clang/bin/clang || { echo "::error::clang download failed"; ls -la clang; exit 1; }
-          test -x gcc64/bin/aarch64-linux-android-gcc || { echo "::error::gcc64 download failed"; ls -la gcc64/bin | head; exit 1; }
+          # Android 11 GCC 4.9 prebuilt ships binutils only (no gcc driver); we
+          # compile with clang and only need its assembler/linker + libs, so
+          # check for ld rather than gcc.
+          test -x gcc64/bin/aarch64-linux-android-ld || { echo "::error::gcc64 download failed"; ls -la gcc64/bin | head; exit 1; }
           echo "clang: $(clang/bin/clang --version | head -1)"
           {
             echo "$GITHUB_WORKSPACE/clang/bin"
