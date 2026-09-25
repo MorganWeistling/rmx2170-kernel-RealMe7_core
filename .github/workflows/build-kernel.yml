@@ -1,0 +1,162 @@
+name: Build RMX2170 Kernel (KernelSU-Next + SUSFS)
+
+# Realme 7 Pro (RMX2170) — atoll / SD720G — kernel 4.14
+# One-click build on GitHub Actions. Outputs an AnyKernel3 flashable zip.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_repo:
+        description: "Kernel source git URL"
+        required: true
+        default: "https://github.com/sm7125/android_kernel_realme_sm7125"
+      kernel_branch:
+        description: "Kernel branch"
+        required: true
+        default: "aex9"
+      defconfig:
+        description: "defconfig name (relative to arch/arm64/configs)"
+        required: true
+        default: "vendor/atoll-perf_defconfig"
+      enable_ksu:
+        description: "Integrate KernelSU-Next"
+        type: boolean
+        default: true
+      enable_susfs:
+        description: "Apply SUSFS (requires KernelSU-Next)"
+        type: boolean
+        default: true
+      clang_repo:
+        description: "Proton clang git URL"
+        required: true
+        default: "https://github.com/kdrag0n/proton-clang"
+
+env:
+  ARCH: arm64
+  KBUILD_BUILD_USER: gha
+  KBUILD_BUILD_HOST: github-actions
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git make bc bison flex libssl-dev libncurses-dev \
+            build-essential ccache zip python3 cpio kmod \
+            device-tree-compiler libelf-dev
+
+      - name: Clone kernel source
+        run: |
+          git clone --depth=1 -b "${{ inputs.kernel_branch }}" \
+            "${{ inputs.kernel_repo }}" kernel
+          echo "Kernel HEAD: $(git -C kernel rev-parse HEAD)"
+
+      - name: Clone Proton clang toolchain
+        run: |
+          git clone --depth=1 "${{ inputs.clang_repo }}" clang
+          echo "$GITHUB_WORKSPACE/clang/bin" >> "$GITHUB_PATH"
+
+      # ---- KernelSU-Next -------------------------------------------------
+      - name: Integrate KernelSU-Next
+        if: ${{ inputs.enable_ksu }}
+        working-directory: kernel
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          echo "KSU-Next version: $(git -C KernelSU-Next describe --tags 2>/dev/null || echo n/a)"
+
+      # ---- SUSFS ---------------------------------------------------------
+      # Non-GKI MSM-4.14 flow: copy susfs fs/ + headers, apply the kernel patch,
+      # then let KernelSU-Next's own susfs support pick up CONFIG_KSU_SUSFS.
+      - name: Apply SUSFS patches
+        if: ${{ inputs.enable_ksu && inputs.enable_susfs }}
+        working-directory: kernel
+        run: |
+          git clone --depth=1 -b kernel-4.14 \
+            https://gitlab.com/simonpunk/susfs4ksu.git ../susfs4ksu || \
+          git clone --depth=1 -b kernel-4.14 \
+            https://github.com/Star-Seven/susfs4ksu.git ../susfs4ksu
+          SUS=../susfs4ksu
+          # kernel-side files
+          cp "$SUS"/kernel_patches/fs/* fs/ 2>/dev/null || true
+          cp "$SUS"/kernel_patches/include/linux/* include/linux/ 2>/dev/null || true
+          # main kernel patch
+          PATCH=$(ls "$SUS"/kernel_patches/50_add_susfs_in_*4.14*.patch | head -n1)
+          echo "Applying $PATCH"
+          patch -p1 < "$PATCH" || { echo "::warning::susfs patch had rejects — review .rej files"; }
+          # KernelSU-side susfs patch (if present in this susfs release)
+          KSU_PATCH=$(ls "$SUS"/kernel_patches/KernelSU*/*.patch 2>/dev/null | head -n1 || true)
+          if [ -n "$KSU_PATCH" ] && [ -d KernelSU-Next ]; then
+            ( cd KernelSU-Next && patch -p1 < "../$KSU_PATCH" || echo "::warning::KSU susfs patch rejects" )
+          fi
+
+      - name: Enable KSU / SUSFS config options
+        if: ${{ inputs.enable_ksu }}
+        working-directory: kernel
+        run: |
+          CFG="arch/arm64/configs/${{ inputs.defconfig }}"
+          {
+            echo "CONFIG_KSU=y"
+            echo "CONFIG_KSU_KPROBES_HOOK=y"
+          } >> "$CFG"
+          if [ "${{ inputs.enable_susfs }}" = "true" ]; then
+            {
+              echo "CONFIG_KSU_SUSFS=y"
+              echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y"
+              echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
+              echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
+              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y"
+              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y"
+              echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
+              echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y"
+              echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y"
+              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
+              echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y"
+              echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
+              echo "CONFIG_KSU_SUSFS_SPOOF_BOOTCONFIG=y"
+              echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
+            } >> "$CFG"
+          fi
+
+      - name: Build kernel
+        working-directory: kernel
+        run: |
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          MAKE_ARGS="ARCH=arm64 O=out CC=clang LD=ld.lld \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump STRIP=llvm-strip"
+          make -j"$(nproc)" $MAKE_ARGS "${{ inputs.defconfig }}"
+          make -j"$(nproc)" $MAKE_ARGS
+          ls -lh out/arch/arm64/boot/
+
+      - name: Package with AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak3
+          # atoll: A/B device, let AnyKernel auto-detect the boot block
+          sed -i 's/device.name1=.*/device.name1=RMX2170/' ak3/anykernel.sh
+          sed -i 's/^BLOCK=.*/BLOCK=auto;/' ak3/anykernel.sh
+          sed -i 's/^IS_SLOT_DEVICE=.*/IS_SLOT_DEVICE=1;/' ak3/anykernel.sh
+          IMG=kernel/out/arch/arm64/boot/Image.gz-dtb
+          [ -f "$IMG" ] || IMG=kernel/out/arch/arm64/boot/Image-dtb
+          [ -f "$IMG" ] || IMG=kernel/out/arch/arm64/boot/Image.gz
+          cp "$IMG" ak3/
+          echo "STAMP=$(date +%Y%m%d-%H%M)" >> "$GITHUB_ENV"
+
+      - name: Zip AnyKernel3
+        run: |
+          cd ak3
+          NAME="RMX2170-KSUNext-SUSFS-${STAMP}.zip"
+          zip -r9 "../$NAME" . -x ".git*" README.md
+          echo "ZIP_NAME=$NAME" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+          retention-days: 30
