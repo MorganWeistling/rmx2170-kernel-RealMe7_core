@@ -99,8 +99,11 @@ jobs:
               ./kernel/selinux/*|./kernel/Makefile) echo "skip KSU-side $rej"; continue;;
             esac
             echo "wiggle -> $tgt"
-            if wiggle --replace --no-backup "$tgt" "$rej"; then rm -f "$rej"; fi
+            # wiggle --merge --replace applies the reject with word-level fuzzy
+            # matching, writing the merged result back into $tgt.
+            if wiggle --merge --replace "$tgt" "$rej"; then rm -f "$rej"; fi
           done
+          find . -name '*.porig' -delete 2>/dev/null || true
           # Fail hard if any core hunk is still unresolved or left conflict markers.
           REJ=$(find fs include -name '*.rej' 2>/dev/null || true)
           CONFLICT=$(grep -rl '^<<<<<<<' fs include 2>/dev/null || true)
