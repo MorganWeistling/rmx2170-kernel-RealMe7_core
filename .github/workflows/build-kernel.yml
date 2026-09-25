@@ -218,8 +218,10 @@ jobs:
             subs=$(grep -oE 'obj-[^=]*\+?=[[:space:]]*[A-Za-z0-9_./-]+/' "$mf" 2>/dev/null \
                      | grep -oE '[A-Za-z0-9_./-]+/$')
             for sub in $subs; do
-              p="$dir/$sub"
+              p="$dir/$sub"; pd="${p%/}"
               if [ ! -f "${p}Makefile" ] && [ ! -f "${p}Kbuild" ]; then
+                # dumps ship some dirs as dangling symlinks/files; replace them
+                if [ -L "$pd" ] || { [ -e "$pd" ] && [ ! -d "$pd" ]; }; then rm -f "$pd"; fi
                 mkdir -p "$p"; : > "${p}Makefile"
                 echo "stub Makefile -> ${p}Makefile"
               fi
