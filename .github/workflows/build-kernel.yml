@@ -60,6 +60,35 @@ jobs:
             "${{ inputs.kernel_repo }}" kernel
           echo "Kernel HEAD: $(git -C kernel rev-parse HEAD)"
 
+      - name: Graft missing Oplus feature files from sibling dump
+        # The atoll 6pro/7pro/8pro/X2 open-source release drops several Oplus
+        # feature files (headers woven into core code) that ARE published in the
+        # sibling realme6/7/Narzo AndroidR dump. Copy the real files over so
+        # they compile instead of being empty-stubbed.
+        working-directory: kernel
+        shell: bash
+        run: |
+          set +e
+          SIBURL=https://github.com/realme-kernel-opensource/realme6_6s_6i_7__nazro_30_20Pro__AndroidR-kernel-source
+          git clone --depth=1 "$SIBURL" ../sibling || { echo "::warning::sibling clone failed"; exit 0; }
+          SIB=../sibling
+          graft() {
+            local p="$1"
+            if [ -e "$SIB/$p" ] || [ -L "$SIB/$p" ]; then
+              [ -L "${p%/}" ] && rm -f "${p%/}"
+              rm -rf "$p"; mkdir -p "$(dirname "$p")"
+              cp -a "$SIB/$p" "$p" && echo "grafted $p"
+            else
+              echo "sibling lacks $p (skip)"
+            fi
+          }
+          graft include/linux/uifirst
+          graft kernel/oppo_special_opt
+          graft mm/oppo_healthinfo
+          graft fs/proc/oppo_healthinfo
+          graft fs/osdcardfs
+          rm -rf "$SIB/.git"
+
       - name: Download AOSP clang + Android GCC toolchains
         # Realme/Oplus AndroidR tree is built by the OEM with AOSP clang and the
         # aarch64-linux-android- triple (see /proc/version: "clang for Android
