@@ -188,19 +188,9 @@ jobs:
             printf '#ifndef _LINUX_PGTABLE_SHIM\n#define _LINUX_PGTABLE_SHIM\n#include <asm/pgtable.h>\n#endif\n' > include/linux/pgtable.h
             echo "added include/linux/pgtable.h shim"
           fi
-          # Central compat header: KSU-Next (dev) uses modern-kernel helpers that
-          # were renamed/added after 4.14. Force-include a shim into every
-          # kernelsu object so backports live in one place.
-          KDIR=$(dirname "$(find KernelSU-Next -name Kbuild | head -1)")
-          {
-            printf '#ifndef _KSU_COMPAT_414_H\n#define _KSU_COMPAT_414_H\n'
-            printf '#include <linux/version.h>\n#include <linux/uaccess.h>\n'
-            printf '#if LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0)\n'
-            printf '#define strncpy_from_user_nofault strncpy_from_user\n'
-            printf '#endif\n#endif\n'
-          } > "$KDIR/ksu_compat_414.h"
-          grep -q ksu_compat_414 "$KDIR/Kbuild" || echo 'ccflags-y += -include $(srctree)/$(src)/ksu_compat_414.h' >> "$KDIR/Kbuild"
-          echo "added KSU 4.14 compat header to $KDIR"
+          # NOTE: the legacy KSU-Next line ships its own compat/kernel_compat.*
+          # layer for old kernels, so we do NOT force-include our own backport
+          # shim (it collided with legacy's strncpy_from_user definitions).
           # NOTE: no manual source hooks here — the legacy KSU-Next line uses
           # kprobe-based hooks (hook_manager.o), so inserting ksu_handle_* calls
           # would reference functions it doesn't define.
