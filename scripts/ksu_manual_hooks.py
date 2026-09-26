@@ -13,6 +13,20 @@ import sys
 # (path, anchor substring identifying the target function's signature,
 #  extern declarations block, call code to insert at the top of the body)
 HOOKS = [
+    # prctl is KernelSU's manager<->kernel command channel. Without this hook
+    # (in non-kprobe mode) the manager can't talk to the kernel and hangs on
+    # launch. ksu_handle_prctl checks for the KERNEL_SU_OPTION magic itself.
+    ("kernel/sys.c",
+     "SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,",
+     """#ifdef CONFIG_KSU
+extern int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
+			unsigned long arg4, unsigned long arg5);
+#endif
+""",
+     """#ifdef CONFIG_KSU
+	ksu_handle_prctl(option, arg2, arg3, arg4, arg5);
+#endif
+"""),
     ("fs/exec.c",
      "static int do_execveat_common(int fd, struct filename *filename,",
      """#ifdef CONFIG_KSU
