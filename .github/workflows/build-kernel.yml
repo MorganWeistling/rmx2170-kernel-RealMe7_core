@@ -194,7 +194,7 @@ jobs:
             printf '#define strncpy_from_user_nofault strncpy_from_user\n'
             printf '#endif\n#endif\n'
           } > "$KDIR/ksu_compat_414.h"
-          grep -q ksu_compat_414 "$KDIR/Kbuild" || echo 'ccflags-y += -include $(src)/ksu_compat_414.h' >> "$KDIR/Kbuild"
+          grep -q ksu_compat_414 "$KDIR/Kbuild" || echo 'ccflags-y += -include $(srctree)/$(src)/ksu_compat_414.h' >> "$KDIR/Kbuild"
           echo "added KSU 4.14 compat header to $KDIR"
           echo "=== inserting KSU-Next manual hooks (4.14 non-GKI) ==="
           curl -sL "https://raw.githubusercontent.com/MorganWeistling/rmx2170-kernel-RealMe7_core/main/scripts/ksu_manual_hooks.py" -o /tmp/ksu_hooks.py
