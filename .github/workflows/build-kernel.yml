@@ -247,10 +247,27 @@ jobs:
             sed -i 's/inotify_mark_user_mask(mark)/(mark->mask \& IN_ALL_EVENTS)/g' fs/notify/fdinfo.c
             echo "patched inotify_mark_user_mask for 4.14"
           fi
-          # NOTE: do NOT apply kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch.
-          # That patch targets the ORIGINAL KernelSU repo; KernelSU-Next already
-          # supports SUSFS natively, and applying it corrupts KSU-Next's Kconfig
-          # (config KSU vanishes -> rootless kernel).
+          # The legacy KSU-Next line has NO native SUSFS Kconfig, so we MUST
+          # apply the KSU-side susfs patch (adds config KSU_SUSFS* + integration
+          # to KernelSU-Next/kernel/Kconfig and core). It targets original-KSU
+          # layout, so allow fuzz/rejects on non-essential hunks but require the
+          # Kconfig to gain KSU_SUSFS.
+          if [ "${{ inputs.enable_susfs }}" = "true" ] && [ -d KernelSU-Next ]; then
+            KP=$(ls "$SUS"/kernel_patches/KernelSU*/*enable_susfs*.patch 2>/dev/null | head -n1)
+            if [ -n "$KP" ]; then
+              echo "Applying KSU-side susfs patch: $KP"
+              ( cd KernelSU-Next && patch -p1 --fuzz=3 < "../$KP" || echo "::warning::KSU susfs patch had rejects" )
+              for rej in $(find KernelSU-Next -name '*.rej'); do
+                tgt="${rej%.rej}"
+                echo "wiggle KSU -> $tgt"
+                if wiggle --merge --replace "$tgt" "$rej"; then rm -f "$rej"; fi
+              done
+              find KernelSU-Next -name '*.porig' -delete 2>/dev/null || true
+              grep -q 'KSU_SUSFS' KernelSU-Next/kernel/Kconfig \
+                || { echo "::error::KSU_SUSFS not added to KernelSU-Next Kconfig"; exit 1; }
+              echo "KSU-side susfs patch applied; KSU_SUSFS present in Kconfig."
+            fi
+          fi
 
       - name: Enable KSU / SUSFS config options
         if: ${{ inputs.enable_ksu }}
