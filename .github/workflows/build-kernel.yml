@@ -18,6 +18,10 @@ on:
         description: "defconfig name (relative to arch/arm64/configs)"
         required: true
         default: "vendor/atoll-perf_defconfig"
+      base_config_url:
+        description: "Optional: URL to a full .config to use as the base instead of running defconfig (e.g. EvoX's /proc/config.gz golden config). Leave empty to use defconfig."
+        required: false
+        default: ""
       enable_ksu:
         description: "Integrate KernelSU-Next"
         type: boolean
@@ -363,7 +367,20 @@ jobs:
             AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
             OBJDUMP=llvm-objdump STRIP=llvm-strip \
             KCFLAGS=-Wno-error=incompatible-pointer-types"
-          make -j"$(nproc)" $MAKE_ARGS "${{ inputs.defconfig }}" 2>&1 | tee /tmp/defc.log
+          if [ -n "${{ inputs.base_config_url }}" ]; then
+            # Use a full golden .config (e.g. the running EvoX kernel's
+            # /proc/config.gz) as the exact base, so we match the ROM's working
+            # kernel and only add KSU/SUSFS/KPROBES on top. Eliminates the
+            # config drift that a fresh `make defconfig` + olddefconfig causes.
+            mkdir -p out
+            curl -LSs "${{ inputs.base_config_url }}" -o /tmp/base.cfg
+            if gzip -t /tmp/base.cfg 2>/dev/null; then gunzip -c /tmp/base.cfg > out/.config; else cp /tmp/base.cfg out/.config; fi
+            echo "Base config lines: $(wc -l < out/.config)"
+            grep -qE '^CONFIG_' out/.config || { echo "::error::base_config_url did not yield a kernel .config"; head out/.config; exit 1; }
+            make -j"$(nproc)" $MAKE_ARGS olddefconfig 2>&1 | tee /tmp/defc.log
+          else
+            make -j"$(nproc)" $MAKE_ARGS "${{ inputs.defconfig }}" 2>&1 | tee /tmp/defc.log
+          fi
           # Appending CONFIG_KSU=y to the defconfig proved unreliable (make
           # defconfig drops it). Force-enable in the generated .config with
           # scripts/config, then re-resolve with olddefconfig.
@@ -470,6 +487,21 @@ jobs:
           ( cd "$M" && zip -r9 "../$HNAME" . )
           echo "HIDE_ZIP=$HNAME" >> "$GITHUB_ENV"
           echo "built $HNAME"
+
+      - name: Stage raw kernel images
+        run: |
+          mkdir -p rawimg
+          for f in Image Image.gz Image.gz-dtb; do
+            [ -f "kernel/out/arch/arm64/boot/$f" ] && cp "kernel/out/arch/arm64/boot/$f" rawimg/ && echo "staged $f"
+          done
+          ls -lh rawimg/
+
+      - name: Upload raw kernel images
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-kernel-images-${{ env.STAMP }}
+          path: rawimg/*
+          retention-days: 30
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
