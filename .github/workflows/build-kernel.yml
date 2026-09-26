@@ -140,7 +140,12 @@ jobs:
         working-directory: kernel
         shell: bash
         run: |
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          # Use the LEGACY line: the default/dev branch targets modern (GKI)
+          # kernels and its hook subsystem (syscall_fn_t, patch_memory,
+          # tracepoints, hlist LSM) does not build on 4.14. v3.4.0-legacy is the
+          # non-GKI / old-kernel variant (kprobe hooks) and matches the manager.
+          KSU_REF=v3.4.0-legacy
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${KSU_REF}/kernel/setup.sh" | bash -s "$KSU_REF"
           echo "KSU-Next version: $(git -C KernelSU-Next describe --tags 2>/dev/null || echo n/a)"
           # Recent setup.sh no longer wires kernelsu into the kernel build, so
           # CONFIG_KSU never becomes a valid symbol and KSU silently drops out.
@@ -196,9 +201,9 @@ jobs:
           } > "$KDIR/ksu_compat_414.h"
           grep -q ksu_compat_414 "$KDIR/Kbuild" || echo 'ccflags-y += -include $(srctree)/$(src)/ksu_compat_414.h' >> "$KDIR/Kbuild"
           echo "added KSU 4.14 compat header to $KDIR"
-          echo "=== inserting KSU-Next manual hooks (4.14 non-GKI) ==="
-          curl -sL "https://raw.githubusercontent.com/MorganWeistling/rmx2170-kernel-RealMe7_core/main/scripts/ksu_manual_hooks.py" -o /tmp/ksu_hooks.py
-          python3 /tmp/ksu_hooks.py
+          # NOTE: no manual source hooks here — the legacy KSU-Next line uses
+          # kprobe-based hooks (hook_manager.o), so inserting ksu_handle_* calls
+          # would reference functions it doesn't define.
 
       # ---- SUSFS ---------------------------------------------------------
       # Non-GKI MSM-4.14 flow: copy susfs fs/ + headers, apply the kernel patch,
@@ -263,13 +268,9 @@ jobs:
         run: |
           CFG="arch/arm64/configs/${{ inputs.defconfig }}"
           {
-            # CONFIG_KPROBES must be on for the KSU symbol to resolve in this
-            # tree; but 4.14 arm64 lacks syscall_fn_t, so we still force MANUAL
-            # hooks (added in the Integrate step) and keep the kprobe hook off.
+            # legacy KSU-Next uses kprobe hooks, which need CONFIG_KPROBES.
             echo "CONFIG_KPROBES=y"
             echo "CONFIG_KSU=y"
-            echo "CONFIG_KSU_MANUAL_HOOK=y"
-            echo "# CONFIG_KSU_KPROBES_HOOK is not set"
           } >> "$CFG"
           if [ "${{ inputs.enable_susfs }}" = "true" ]; then
             {
@@ -376,7 +377,7 @@ jobs:
             grep -n 'kernelsu/Kconfig' drivers/Kconfig || echo "(source line MISSING in drivers/Kconfig)"
             echo "AFTER make defconfig: $(grep -E '^CONFIG_KSU=|^# CONFIG_KSU ' out/.config || echo NONE)"
             chmod +x scripts/config
-            KOPTS="--enable KPROBES --enable KSU --enable KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK"
+            KOPTS="--enable KPROBES --enable KSU"
             if [ "${{ inputs.enable_susfs }}" = "true" ]; then
               KOPTS="$KOPTS --enable KSU_SUSFS --enable KSU_SUSFS_SUS_PATH \
                 --enable KSU_SUSFS_SUS_MOUNT --enable KSU_SUSFS_SUS_KSTAT \
