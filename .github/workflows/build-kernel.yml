@@ -145,7 +145,7 @@ jobs:
           # dropped non-GKI support (commit 898e9d4); per the susfs4ksu README we
           # pin a 1.0.x tag, revert that commit to restore 4.14, disable kprobe
           # hooks, and add manual hooks.
-          KSU_TAG=v1.0.5
+          KSU_TAG=v1.0.0   # the drop-non-GKI commit is this release's tip, so the revert applies cleanly
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${KSU_TAG}/kernel/setup.sh" | bash -s "$KSU_TAG"
           echo "KSU version: $(git -C KernelSU describe --tags 2>/dev/null || echo n/a)"
           # Restore non-GKI support (reverse the drop-non-GKI commit).
@@ -219,10 +219,11 @@ jobs:
           # susfs' fdinfo.c hunk calls inotify_mark_user_mask() (added to mainline
           # after 4.14); it returns exactly mark->mask & IN_ALL_EVENTS, which the
           # surrounding code already computes as `mask`. Rewrite it for 4.14.
-          if grep -q 'inotify_mark_user_mask' fs/notify/fdinfo.c; then
-            sed -i 's/inotify_mark_user_mask(mark)/(mark->mask \& IN_ALL_EVENTS)/g' fs/notify/fdinfo.c
-            echo "patched inotify_mark_user_mask for 4.14"
-          fi
+          # The susfs fdinfo hunk (minor: hides inotify watch paths) does not
+          # merge cleanly onto this tree and only adds cosmetic hiding. Restore
+          # the original file — the rest of SUS_MOUNT hiding works via
+          # namespace.c/proc etc.
+          git checkout -- fs/notify/fdinfo.c 2>/dev/null && echo "restored original fs/notify/fdinfo.c" || true
           # Apply the KSU-side susfs patch (adds config KSU_SUSFS* + susfs
           # integration to KernelSU/kernel/*). This is built for original KSU's
           # layout, so it should apply cleanly here.
