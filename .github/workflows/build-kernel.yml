@@ -42,8 +42,9 @@ on:
 
 env:
   ARCH: arm64
-  KBUILD_BUILD_USER: gha
-  KBUILD_BUILD_HOST: github-actions
+  # Stock-looking identity so /proc/version doesn't scream "self-built".
+  KBUILD_BUILD_USER: root
+  KBUILD_BUILD_HOST: localhost
 
 jobs:
   build:
@@ -401,9 +402,62 @@ jobs:
           zip -r9 "../$NAME" . -x ".git*" README.md
           echo "ZIP_NAME=$NAME" >> "$GITHUB_ENV"
 
+      - name: Build SUSFS rules module
+        if: ${{ inputs.enable_ksu && inputs.enable_susfs }}
+        shell: bash
+        run: |
+          # This module ONLY applies SUSFS root-hiding rules via ksu_susfs
+          # (spoof the kernel uname string, hide the KSU paths, unmount module
+          # overlays from apps' view). It does NOT touch verifiedbootstate /
+          # flash.locked — leave Verified Boot / Play Integrity prop handling to
+          # a dedicated module (PlayIntegrityFix) that the user installs.
+          M=hidemod
+          mkdir -p "$M"
+          cat > "$M/module.prop" <<'EOF'
+          id=rmx2170_susfs
+          name=RMX2170 SUSFS rules
+          version=1.0
+          versionCode=1
+          author=rmx2170-kernel-CI
+          description=Applies ksu_susfs rules on boot (uname spoof, sus_path, try_umount). Props/Play Integrity handled separately by PIF.
+          EOF
+          sed -i 's/^          //' "$M/module.prop"
+          cat > "$M/post-fs-data.sh" <<'EOF'
+          #!/system/bin/sh
+          # SUSFS hiding via the ksu_susfs tool that ships with the susfs module.
+          SF=""
+          for c in ksu_susfs /data/adb/ksu/bin/ksu_susfs; do
+            command -v "$c" >/dev/null 2>&1 && SF="$c" && break
+            [ -x "$c" ] && SF="$c" && break
+          done
+          [ -z "$SF" ] && SF="$(ls /data/adb/modules/*/ksu_susfs 2>/dev/null | head -1)"
+          [ -z "$SF" ] && exit 0
+          "$SF" set_uname '4.14.180-perf+' 'default' 2>/dev/null
+          for p in /data/adb/ksu /data/adb/ksud /data/adb/modules /data/adb/service.d; do
+            "$SF" add_sus_path "$p" 2>/dev/null
+          done
+          "$SF" add_try_umount /system 1 2>/dev/null
+          "$SF" add_try_umount /vendor 1 2>/dev/null
+          "$SF" add_try_umount /data/adb/modules 1 2>/dev/null
+          "$SF" enable_log 0 2>/dev/null
+          EOF
+          sed -i 's/^          //' "$M/post-fs-data.sh"
+          HNAME="RMX2170-SUSFS-Module-${STAMP}.zip"
+          ( cd "$M" && zip -r9 "../$HNAME" . )
+          echo "HIDE_ZIP=$HNAME" >> "$GITHUB_ENV"
+          echo "built $HNAME"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_NAME }}
           path: ${{ env.ZIP_NAME }}
+          retention-days: 30
+
+      - name: Upload hiding module
+        if: ${{ inputs.enable_ksu && inputs.enable_susfs }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.HIDE_ZIP }}
+          path: ${{ env.HIDE_ZIP }}
           retention-days: 30
