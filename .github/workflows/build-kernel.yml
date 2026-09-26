@@ -154,9 +154,10 @@ jobs:
           curl -sL "$REVURL" -o /tmp/dropngki.diff
           ( cd KernelSU && { git apply -R /tmp/dropngki.diff || patch -p1 -R --fuzz=3 < /tmp/dropngki.diff; } \
             && echo "reverted drop-non-GKI" || echo "::warning::non-GKI revert had rejects" )
-          # Tell KernelSU not to use kprobe hooks (we add manual hooks instead).
-          find KernelSU -type f \( -name '*.c' -o -name '*.h' \) \
-            -exec sed -i 's/#ifdef CONFIG_KPROBES/#if defined(CONFIG_KPROBES) \&\& 0/g' {} +
+          # Use KernelSU's native KPROBE hooks (CONFIG_KPROBES=y). They cover ALL
+          # interception incl. the prctl manager-comms channel and work on 4.14.
+          # (The earlier "disable kprobes + manual hooks" path broke manager
+          # comms, so we do NOT disable them and do NOT add manual hooks.)
           # Wire into the build (setup.sh usually does this; keep as a safety net).
           test -e drivers/kernelsu/Kconfig || ln -sf ../KernelSU/kernel drivers/kernelsu
           grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig \
@@ -168,9 +169,7 @@ jobs:
           echo "config KSU in sourced Kconfig: $(grep -c '^config KSU$' drivers/kernelsu/Kconfig 2>/dev/null)"
           # pgtable.h compat (harmless on 4.14 if some file wants the 5.8 split).
           [ -e include/linux/pgtable.h ] || printf '#ifndef _LINUX_PGTABLE_SHIM\n#define _LINUX_PGTABLE_SHIM\n#include <asm/pgtable.h>\n#endif\n' > include/linux/pgtable.h
-          # Manual hooks (ksu_handle_* names match original KernelSU).
-          curl -sL "https://raw.githubusercontent.com/MorganWeistling/rmx2170-kernel-RealMe7_core/main/scripts/ksu_manual_hooks.py" -o /tmp/ksu_hooks.py
-          python3 /tmp/ksu_hooks.py
+          # No manual hooks — native kprobe hooks handle interception.
 
       # ---- SUSFS ---------------------------------------------------------
       # Non-GKI MSM-4.14 flow: copy susfs fs/ + headers, apply the kernel patch,
