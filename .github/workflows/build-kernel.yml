@@ -134,66 +134,42 @@ jobs:
             echo "$GITHUB_WORKSPACE/gcc32/bin"
           } >> "$GITHUB_PATH"
 
-      # ---- KernelSU-Next -------------------------------------------------
-      - name: Integrate KernelSU-Next
+      # ---- KernelSU (original, non-GKI + SUSFS) --------------------------
+      - name: Integrate KernelSU
         if: ${{ inputs.enable_ksu }}
         working-directory: kernel
         shell: bash
         run: |
-          # Use the LEGACY line: the default/dev branch targets modern (GKI)
-          # kernels and its hook subsystem (syscall_fn_t, patch_memory,
-          # tracepoints, hlist LSM) does not build on 4.14. v3.4.0-legacy is the
-          # non-GKI / old-kernel variant (kprobe hooks) and matches the manager.
-          KSU_REF=v3.4.0-legacy
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${KSU_REF}/kernel/setup.sh" | bash -s "$KSU_REF"
-          echo "KSU-Next version: $(git -C KernelSU-Next describe --tags 2>/dev/null || echo n/a)"
-          # Recent setup.sh no longer wires kernelsu into the kernel build, so
-          # CONFIG_KSU never becomes a valid symbol and KSU silently drops out.
-          # Explicitly source its Kconfig and add its obj to drivers/.
-          test -e drivers/kernelsu/Kconfig || ln -sf ../KernelSU-Next/kernel drivers/kernelsu
-          if ! grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig; then
-            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          fi
-          if ! grep -q 'kernelsu' drivers/Makefile; then
-            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-          fi
+          # SUSFS's susfs4ksu patch is built for ORIGINAL KernelSU (tiann), not
+          # KSU-Next (whose refactored layout the patch can't apply to). KSU v1.0
+          # dropped non-GKI support (commit 898e9d4); per the susfs4ksu README we
+          # pin a 1.0.x tag, revert that commit to restore 4.14, disable kprobe
+          # hooks, and add manual hooks.
+          KSU_TAG=v1.0.5
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/${KSU_TAG}/kernel/setup.sh" | bash -s "$KSU_TAG"
+          echo "KSU version: $(git -C KernelSU describe --tags 2>/dev/null || echo n/a)"
+          # Restore non-GKI support (reverse the drop-non-GKI commit).
+          REVURL="https://github.com/tiann/KernelSU/commit/898e9d4f8ca9b2f46b0c6b36b80a872b5b88d899.diff"
+          curl -sL "$REVURL" -o /tmp/dropngki.diff
+          ( cd KernelSU && { git apply -R /tmp/dropngki.diff || patch -p1 -R --fuzz=3 < /tmp/dropngki.diff; } \
+            && echo "reverted drop-non-GKI" || echo "::warning::non-GKI revert had rejects" )
+          # Tell KernelSU not to use kprobe hooks (we add manual hooks instead).
+          find KernelSU -type f \( -name '*.c' -o -name '*.h' \) \
+            -exec sed -i 's/#ifdef CONFIG_KPROBES/#if defined(CONFIG_KPROBES) \&\& 0/g' {} +
+          # Wire into the build (setup.sh usually does this; keep as a safety net).
+          test -e drivers/kernelsu/Kconfig || ln -sf ../KernelSU/kernel drivers/kernelsu
+          grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig \
+            || sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          grep -q 'kernelsu' drivers/Makefile \
+            || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           echo "=== wiring check ==="
           grep -n 'kernelsu' drivers/Kconfig drivers/Makefile || { echo "::error::KSU wiring failed"; exit 1; }
-          echo "--- drivers/kernelsu symlink: $(readlink drivers/kernelsu 2>/dev/null || echo '(not a symlink)') ---"
-          echo "--- config KSU present in sourced Kconfig? ---"
-          grep -c '^config KSU$' drivers/kernelsu/Kconfig || echo "0 (MISSING!)"
-          # The susfs patch (applied next) inserts its own 'menu \"KernelSU - SUSFS\"'
-          # which can shadow ordering; make sure the KSU source line sits at the
-          # very end of the top-level Device Drivers menu, not inside a submenu.
-          if ! grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig; then
-            printf '\nsource "drivers/kernelsu/Kconfig"\n' >> drivers/Kconfig
-          fi
-          echo "=== drivers/Kconfig KSU source context ==="
-          grep -n -B2 -A1 'kernelsu' drivers/Kconfig || echo "no kernelsu line"
-          echo "=== last 6 lines of drivers/Kconfig ==="
-          tail -6 drivers/Kconfig
-          # KSU-Next's hook/syscall_hook.h only defines syscall_fn_t for x86_64
-          # and riscv, so it fails to compile on arm64. The header is always
-          # built, but with MANUAL_HOOK the syscall-table hook is never used, so
-          # we just need the type to exist: reuse the riscv pt_regs signature.
-          HH=$(find KernelSU-Next -name syscall_hook.h 2>/dev/null | head -1)
-          if [ -n "$HH" ] && ! grep -q '__aarch64__' "$HH"; then
-            sed -i 's/#elif defined(__riscv)/#elif defined(__riscv) || defined(__aarch64__)/' "$HH"
-            echo "patched $HH for arm64 syscall_fn_t"
-          fi
-          # KSU-Next (dev) targets modern kernels and includes <linux/pgtable.h>
-          # (split out in 5.8); on 4.14 that content lives in <asm/pgtable.h>.
-          # Provide a compat shim so those includes resolve.
-          if [ ! -e include/linux/pgtable.h ]; then
-            printf '#ifndef _LINUX_PGTABLE_SHIM\n#define _LINUX_PGTABLE_SHIM\n#include <asm/pgtable.h>\n#endif\n' > include/linux/pgtable.h
-            echo "added include/linux/pgtable.h shim"
-          fi
-          # NOTE: the legacy KSU-Next line ships its own compat/kernel_compat.*
-          # layer for old kernels, so we do NOT force-include our own backport
-          # shim (it collided with legacy's strncpy_from_user definitions).
-          # NOTE: no manual source hooks here — the legacy KSU-Next line uses
-          # kprobe-based hooks (hook_manager.o), so inserting ksu_handle_* calls
-          # would reference functions it doesn't define.
+          echo "config KSU in sourced Kconfig: $(grep -c '^config KSU$' drivers/kernelsu/Kconfig 2>/dev/null)"
+          # pgtable.h compat (harmless on 4.14 if some file wants the 5.8 split).
+          [ -e include/linux/pgtable.h ] || printf '#ifndef _LINUX_PGTABLE_SHIM\n#define _LINUX_PGTABLE_SHIM\n#include <asm/pgtable.h>\n#endif\n' > include/linux/pgtable.h
+          # Manual hooks (ksu_handle_* names match original KernelSU).
+          curl -sL "https://raw.githubusercontent.com/MorganWeistling/rmx2170-kernel-RealMe7_core/main/scripts/ksu_manual_hooks.py" -o /tmp/ksu_hooks.py
+          python3 /tmp/ksu_hooks.py
 
       # ---- SUSFS ---------------------------------------------------------
       # Non-GKI MSM-4.14 flow: copy susfs fs/ + headers, apply the kernel patch,
@@ -247,24 +223,22 @@ jobs:
             sed -i 's/inotify_mark_user_mask(mark)/(mark->mask \& IN_ALL_EVENTS)/g' fs/notify/fdinfo.c
             echo "patched inotify_mark_user_mask for 4.14"
           fi
-          # The legacy KSU-Next line has NO native SUSFS Kconfig, so we MUST
-          # apply the KSU-side susfs patch (adds config KSU_SUSFS* + integration
-          # to KernelSU-Next/kernel/Kconfig and core). It targets original-KSU
-          # layout, so allow fuzz/rejects on non-essential hunks but require the
-          # Kconfig to gain KSU_SUSFS.
-          if [ "${{ inputs.enable_susfs }}" = "true" ] && [ -d KernelSU-Next ]; then
+          # Apply the KSU-side susfs patch (adds config KSU_SUSFS* + susfs
+          # integration to KernelSU/kernel/*). This is built for original KSU's
+          # layout, so it should apply cleanly here.
+          if [ "${{ inputs.enable_susfs }}" = "true" ] && [ -d KernelSU ]; then
             KP=$(ls "$SUS"/kernel_patches/KernelSU*/*enable_susfs*.patch 2>/dev/null | head -n1)
             if [ -n "$KP" ]; then
               echo "Applying KSU-side susfs patch: $KP"
-              ( cd KernelSU-Next && patch -p1 --fuzz=3 < "../$KP" || echo "::warning::KSU susfs patch had rejects" )
-              for rej in $(find KernelSU-Next -name '*.rej'); do
+              ( cd KernelSU && patch -p1 --fuzz=3 < "../$KP" || echo "::warning::KSU susfs patch had rejects" )
+              for rej in $(find KernelSU -name '*.rej'); do
                 tgt="${rej%.rej}"
                 echo "wiggle KSU -> $tgt"
                 if wiggle --merge --replace "$tgt" "$rej"; then rm -f "$rej"; fi
               done
-              find KernelSU-Next -name '*.porig' -delete 2>/dev/null || true
-              grep -q 'KSU_SUSFS' KernelSU-Next/kernel/Kconfig \
-                || { echo "::error::KSU_SUSFS not added to KernelSU-Next Kconfig"; exit 1; }
+              find KernelSU -name '*.porig' -delete 2>/dev/null || true
+              grep -q 'KSU_SUSFS' KernelSU/kernel/Kconfig \
+                || { echo "::error::KSU_SUSFS not added to KernelSU Kconfig"; exit 1; }
               echo "KSU-side susfs patch applied; KSU_SUSFS present in Kconfig."
             fi
           fi
