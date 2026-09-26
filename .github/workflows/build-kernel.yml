@@ -70,6 +70,25 @@ jobs:
             "${{ inputs.kernel_repo }}" kernel
           echo "Kernel HEAD: $(git -C kernel rev-parse HEAD)"
 
+      - name: Fix broken tree source (bka/vic botched stable-merge)
+        working-directory: kernel
+        shell: bash
+        run: |
+          # bka & vic carry a botched stable-merge of jump_label.c:
+          # static_key_slow_dec_deferred() references undeclared work/timeout
+          # and a non-existent static_key_slow_try_dec(). cnb has the correct
+          # 4.14 body. Restore it (no-op on branches that are already correct).
+          JL=kernel/jump_label.c
+          if grep -q 'static_key_slow_try_dec' "$JL"; then
+            perl -0777 -i -pe 's/\tif \(static_key_slow_try_dec\(key\)\)\n\t\treturn;\n\n\tqueue_delayed_work\(system_power_efficient_wq, work, timeout\);/\t__static_key_slow_dec(&key->key, key->timeout, &key->work);/' "$JL"
+            if grep -q 'static_key_slow_try_dec' "$JL"; then
+              echo "::error::jump_label.c fix did not apply"; grep -nA6 'void static_key_slow_dec_deferred' "$JL"; exit 1
+            fi
+            echo "Patched $JL:"; grep -nA4 'void static_key_slow_dec_deferred' "$JL"
+          else
+            echo "$JL already correct; skipping."
+          fi
+
       - name: Graft missing Oplus feature files from sibling dump
         if: ${{ inputs.vendor_graft }}
         # The atoll 6pro/7pro/8pro/X2 open-source release drops several Oplus
@@ -360,6 +379,11 @@ jobs:
             grep -n 'kernelsu/Kconfig' drivers/Kconfig || echo "(source line MISSING in drivers/Kconfig)"
             echo "AFTER make defconfig: $(grep -E '^CONFIG_KSU=|^# CONFIG_KSU ' out/.config || echo NONE)"
             chmod +x scripts/config
+            # The non-preprocessed Oplus defconfig leaves OPLUS_FEATURE_MODEM_MINIDUMP
+            # code enabled (via CONFIG_OPLUS_FEATURE_QCOM_MINIDUMP_ENHANCE) but the
+            # matching pil_desc members are gated by CONFIG_QCOM_MINIDUMP. Enable it
+            # so struct and code agree.
+            ./scripts/config --file out/.config --enable QCOM_MINIDUMP || true
             KOPTS="--enable KPROBES --enable KSU"
             if [ "${{ inputs.enable_susfs }}" = "true" ]; then
               KOPTS="$KOPTS --enable KSU_SUSFS --enable KSU_SUSFS_SUS_PATH \
