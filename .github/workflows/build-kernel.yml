@@ -167,6 +167,15 @@ jobs:
           grep -n -B2 -A1 'kernelsu' drivers/Kconfig || echo "no kernelsu line"
           echo "=== last 6 lines of drivers/Kconfig ==="
           tail -6 drivers/Kconfig
+          # KSU-Next's hook/syscall_hook.h only defines syscall_fn_t for x86_64
+          # and riscv, so it fails to compile on arm64. The header is always
+          # built, but with MANUAL_HOOK the syscall-table hook is never used, so
+          # we just need the type to exist: reuse the riscv pt_regs signature.
+          HH=$(find KernelSU-Next -name syscall_hook.h 2>/dev/null | head -1)
+          if [ -n "$HH" ] && ! grep -q '__aarch64__' "$HH"; then
+            sed -i 's/#elif defined(__riscv)/#elif defined(__riscv) || defined(__aarch64__)/' "$HH"
+            echo "patched $HH for arm64 syscall_fn_t"
+          fi
           echo "=== inserting KSU-Next manual hooks (4.14 non-GKI) ==="
           curl -sL "https://raw.githubusercontent.com/MorganWeistling/rmx2170-kernel-RealMe7_core/main/scripts/ksu_manual_hooks.py" -o /tmp/ksu_hooks.py
           python3 /tmp/ksu_hooks.py
