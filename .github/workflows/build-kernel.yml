@@ -342,7 +342,8 @@ jobs:
             CROSS_COMPILE=$CROSS \
             CROSS_COMPILE_ARM32=$CROSS32 \
             AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump STRIP=llvm-strip"
+            OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            KCFLAGS=-Wno-error=incompatible-pointer-types"
           make -j"$(nproc)" $MAKE_ARGS "${{ inputs.defconfig }}" 2>&1 | tee /tmp/defc.log
           # Appending CONFIG_KSU=y to the defconfig proved unreliable (make
           # defconfig drops it). Force-enable in the generated .config with
